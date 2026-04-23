@@ -28,6 +28,11 @@ export interface AuthTokens {
   refreshExpiresAt: Date;
 }
 
+interface PasswordResetIssuanceResult {
+  issued: boolean;
+  tokenPreview?: string;
+}
+
 export async function signInAdmin(
   request: FastifyRequest,
   email: string,
@@ -148,32 +153,63 @@ export async function requestPasswordReset(request: FastifyRequest, email: strin
     return;
   }
 
+  await issuePasswordResetToken(request, account.id);
+}
+
+export async function requestPasswordResetByAccountId(
+  request: FastifyRequest,
+  accountId: string,
+  createdByAccountId?: string,
+): Promise<PasswordResetIssuanceResult> {
+  const accountResult = await dbPool.query<{ id: string; is_active: boolean }>(
+    `select id, is_active from app.accounts where id = $1`,
+    [accountId],
+  );
+  const account = accountResult.rows[0];
+  if (!account || !account.is_active) {
+    return { issued: false };
+  }
+  const tokenPreview = await issuePasswordResetToken(request, account.id, createdByAccountId);
+  return { issued: true, tokenPreview };
+}
+
+async function issuePasswordResetToken(
+  request: FastifyRequest,
+  accountId: string,
+  createdByAccountId?: string,
+): Promise<string | undefined> {
   const rawToken = crypto.randomBytes(32).toString("hex");
   const tokenHash = hashToken(rawToken);
   const expiresAt = new Date(Date.now() + env.PASSWORD_RESET_TTL_MINUTES * 60 * 1000);
 
   await dbPool.query(
     `
-      insert into app.admin_password_reset_tokens (account_id, token_hash, expires_at, requested_ip, requested_user_agent)
-      values ($1, $2, $3, $4, $5)
+      insert into app.admin_password_reset_tokens (
+        account_id, token_hash, expires_at, requested_ip, requested_user_agent, created_by_account_id
+      )
+      values ($1, $2, $3, $4, $5, $6)
     `,
-    [account.id, tokenHash, expiresAt, request.ip, request.headers["user-agent"]?.toString() ?? null],
+    [accountId, tokenHash, expiresAt, request.ip, request.headers["user-agent"]?.toString() ?? null, createdByAccountId ?? null],
   );
 
   await writeAuditLog({
     actorType: "admin",
-    accountId: account.id,
+    accountId,
     source: "auth",
     action: "password_reset_requested",
     entityType: "account",
-    entityId: account.id,
+    entityId: accountId,
     summary: "Admin password reset requested",
     requestId: request.requestId,
     ipAddress: request.ip,
     userAgent: request.headers["user-agent"]?.toString(),
   });
 
-  request.log.info({ accountId: account.id, token: rawToken }, "Password reset token generated");
+  if (env.NODE_ENV !== "production") {
+    request.log.info({ accountId, token: rawToken }, "Password reset token generated");
+    return rawToken;
+  }
+  return undefined;
 }
 
 export async function resetPasswordWithToken(

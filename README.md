@@ -50,3 +50,6 @@ npm run dev
 - FKs include explicit `ON DELETE` behavior.
 - Includes partial index for Stripe event processing queue and open-order queue.
 - Frontend is intentionally not included.
+- Admin auth supports refresh rotation, password reset token hashing, and role-aware guards.
+- Super-admin management endpoints are available under `/v1/super-admin/*`.
+- Bootstrap endpoint `/v1/super-admin/bootstrap` is controlled by `SUPER_ADMIN_BOOTSTRAP_KEY` and auto-disables once a super admin exists.
